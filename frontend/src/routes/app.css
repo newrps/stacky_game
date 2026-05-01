@@ -1,0 +1,13 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: #0a0d11; color: #e8edf3;
+}
+button { font-family: inherit; }
+a { color: #66b3ff; text-decoration: none; }
+a:hover { text-decoration: underline; }

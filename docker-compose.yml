@@ -1,0 +1,36 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: ps-tetris-backend
+    restart: unless-stopped
+    environment:
+      PORT: 8772
+      RUST_LOG: ${RUST_LOG:-info}
+    expose:
+      - "8772"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8772/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ps-tetris
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: ps-tetris-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${HOST_PORT:-18083}:80"
+    networks:
+      - ps-tetris
+
+networks:
+  ps-tetris:
+    driver: bridge
