@@ -1,6 +1,10 @@
 import {
   type Piece, type PieceType, BagRng, getMatrix, kicks, spawnPosition, COLORS, PIECES
 } from './piece';
+import {
+  sndLock, sndHardDrop, sndHold, sndClear, sndTSpin, sndPerfectClear,
+  sndLevelUp, sndGameOver, sndGarbage
+} from './sound';
 
 export const BOARD_W = 10;
 export const BOARD_H = 20;
@@ -104,6 +108,7 @@ export class TetrisGame {
       // top out
       this.state.gameOver = true;
       this.state.current = null;
+      sndGameOver();
       return;
     }
     this.state.current = piece;
@@ -181,6 +186,7 @@ export class TetrisGame {
     let dropped = 0;
     while (this.move_y(1)) dropped++;
     this.state.score += dropped * 2;
+    sndHardDrop();
     this.lockPiece();
   }
 
@@ -190,12 +196,14 @@ export class TetrisGame {
     const prev = this.state.hold;
     this.state.hold = cur.type;
     this.state.canHold = false;
+    sndHold();
     if (prev) {
       const pos = spawnPosition(prev);
       const np: Piece = { type: prev, rotation: 0, x: pos.x, y: pos.y };
       if (this.collides(np, this.state.grid)) {
         this.state.gameOver = true;
         this.state.current = null;
+        sndGameOver();
         return;
       }
       this.state.current = np;
@@ -279,8 +287,24 @@ export class TetrisGame {
     }
 
     // 라인·레벨
+    const prevLevel = this.state.level;
     this.state.lines += cleared.length;
     this.state.level = Math.max(1, Math.floor(this.state.lines / 10) + 1);
+
+    // 사운드: 라인 수 / T-Spin / Perfect Clear / 레벨업 / 락
+    if (perfectClear) {
+      sndPerfectClear();
+    } else if (tspin !== 'none' && cleared.length > 0) {
+      sndTSpin();
+      sndClear(cleared.length);
+    } else if (cleared.length > 0) {
+      sndClear(cleared.length);
+    } else {
+      sndLock();
+    }
+    if (this.state.level > prevLevel) {
+      setTimeout(() => sndLevelUp(), 200);
+    }
 
     // === 가비지 어택 처리 ===
     let attackOut = computeAttack(cleared.length, tspin, this.state.b2b, this.state.combo, perfectClear);
@@ -353,9 +377,11 @@ export class TetrisGame {
     const row: Cell[] = new Array(BOARD_W).fill('G');
     if (hole >= 0 && hole < BOARD_W) row[hole] = null;
     this.state.grid.push(row);
+    sndGarbage();
     // 만약 piece가 천장에 박히면 game over
     if (this.state.current && this.collides(this.state.current, this.state.grid)) {
       this.state.gameOver = true;
+      sndGameOver();
     }
   }
 

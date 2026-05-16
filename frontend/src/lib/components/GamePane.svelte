@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { TetrisGame } from '$lib/tetris/game';
   import { drawBoard, drawPiecePreview } from '$lib/tetris/render';
+  import { unlockAudio } from '$lib/tetris/sound';
 
   export let seed = Math.floor(Math.random() * 0x7fffffff);
   export let onStateChange: ((state: any) => void) | null = null;
@@ -32,6 +33,11 @@
   }
   let pendingGarbage = 0;
   let gameOverNotified = false;
+  // UI 미러 (값이 바뀔 때만 Svelte 트리거 → 매 프레임 repaint 방지)
+  let uiScore = 0;
+  let uiLines = 0;
+  let uiLevel = 1;
+  let uiLastClear: any = null;
   let canvas: HTMLCanvasElement;
   let holdCanvas: HTMLCanvasElement;
   let nextCanvases: HTMLCanvasElement[] = [];
@@ -69,7 +75,14 @@
     }
 
     game.tick(now);
-    pendingGarbage = game.pendingGarbage.length;
+    // Svelte 반응형은 값이 바뀔 때만 트리거 — 매 프레임 DOM 재처리/repaint 방지
+    if (pendingGarbage !== game.pendingGarbage.length) {
+      pendingGarbage = game.pendingGarbage.length;
+    }
+    if (uiScore !== game.state.score) uiScore = game.state.score;
+    if (uiLines !== game.state.lines) uiLines = game.state.lines;
+    if (uiLevel !== game.state.level) uiLevel = game.state.level;
+    if (uiLastClear !== game.state.lastClear) uiLastClear = game.state.lastClear;
     if (game.state.gameOver && !gameOverNotified) {
       gameOverNotified = true;
       onGameOver?.();
@@ -95,6 +108,7 @@
   }
 
   function onKeyDown(e: KeyboardEvent) {
+    unlockAudio();
     if (inputLocked) return;
     if (game.state.gameOver) {
       // 멀티플레이에서는 외부 restart 만 — 솔로(R)는 그대로 허용
@@ -116,8 +130,21 @@
   }
   function onKeyUp(e: KeyboardEvent) {
     keyDown[e.key] = false;
-    if (e.key === 'ArrowLeft' && dasDir === -1) dasDir = 0;
-    if (e.key === 'ArrowRight' && dasDir === 1) dasDir = 0;
+    if (e.key === 'ArrowLeft') {
+      if (keyDown['ArrowRight']) { dasDir = 1; dasTimer = 0; arrTimer = 0; }
+      else if (dasDir === -1) dasDir = 0;
+    }
+    if (e.key === 'ArrowRight') {
+      if (keyDown['ArrowLeft']) { dasDir = -1; dasTimer = 0; arrTimer = 0; }
+      else if (dasDir === 1) dasDir = 0;
+    }
+  }
+  // 포커스 잃으면 stuck 방지: 모든 키 상태 초기화
+  function onBlur() {
+    for (const k in keyDown) keyDown[k] = false;
+    dasDir = 0;
+    dasTimer = 0;
+    arrTimer = 0;
   }
 
   // === 터치 컨트롤 ===
@@ -126,6 +153,7 @@
   let softTimer: any = null;
 
   function action(name: string) {
+    unlockAudio();
     if (inputLocked) return;
     if (game.state.gameOver) {
       if (name === 'reset' && !onAttack) reset();
@@ -159,6 +187,12 @@
     touchHold.dir = 0;
     if (touchHold.timer) { clearInterval(touchHold.timer); touchHold.timer = null; }
   }
+  function capture(e: PointerEvent) {
+    const t = e.currentTarget as HTMLElement | null;
+    if (t && typeof t.setPointerCapture === 'function') {
+      try { t.setPointerCapture(e.pointerId); } catch {}
+    }
+  }
   function pressSoft() {
     action('soft');
     if (softTimer) clearInterval(softTimer);
@@ -168,10 +202,19 @@
     if (softTimer) { clearInterval(softTimer); softTimer = null; }
   }
 
+  // 화면 어디든 손가락 떼면 자동반복 멈춤 (버튼 밖으로 슬라이드 후 떼는 경우)
+  function globalPointerEnd() {
+    releaseDir();
+    releaseSoft();
+  }
+
   onMount(() => {
     raf = requestAnimationFrame(loop);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('pointerup', globalPointerEnd);
+    window.addEventListener('pointercancel', globalPointerEnd);
     // 터치 디바이스 감지 (코스 포인터)
     touchDevice = window.matchMedia?.('(pointer: coarse)').matches ?? false;
   });
@@ -180,9 +223,12 @@
     if (raf) cancelAnimationFrame(raf);
     window.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('keyup', onKeyUp);
+    window.removeEventListener('blur', onBlur);
+    window.removeEventListener('pointerup', globalPointerEnd);
+    window.removeEventListener('pointercancel', globalPointerEnd);
   });
 
-  $: lc = game.state.lastClear;
+  $: lc = uiLastClear;
 </script>
 
 <div class="game">
@@ -192,9 +238,9 @@
       <canvas bind:this={holdCanvas}></canvas>
     </div>
     <div class="panel score-panel">
-      <div class="row"><span>SCORE</span><b>{game.state.score.toLocaleString()}</b></div>
-      <div class="row"><span>LINES</span><b>{game.state.lines}</b></div>
-      <div class="row"><span>LEVEL</span><b>{game.state.level}</b></div>
+      <div class="row"><span>SCORE</span><b>{uiScore.toLocaleString()}</b></div>
+      <div class="row"><span>LINES</span><b>{uiLines}</b></div>
+      <div class="row"><span>LEVEL</span><b>{uiLevel}</b></div>
       {#if game.state.combo > 0}
         <div class="row combo"><span>COMBO</span><b>{game.state.combo}</b></div>
       {/if}
@@ -235,17 +281,13 @@
 {#if touchDevice}
   <div class="touch-bar">
     <button class="tbtn dir"
-      on:pointerdown|preventDefault={() => pressDir(-1)}
-      on:pointerup={releaseDir}
-      on:pointercancel={releaseDir}
-      on:pointerleave={releaseDir}>◀</button>
+      on:pointerdown|preventDefault={(e) => { capture(e); pressDir(-1); }}>◀</button>
+    <button class="tbtn soft"
+      on:pointerdown|preventDefault={(e) => { capture(e); pressSoft(); }}>↓</button>
     <button class="tbtn rotcw" on:pointerdown|preventDefault={() => action('cw')}>↻</button>
     <button class="tbtn hard" on:pointerdown|preventDefault={() => action('hard')}>⤓</button>
     <button class="tbtn dir"
-      on:pointerdown|preventDefault={() => pressDir(1)}
-      on:pointerup={releaseDir}
-      on:pointercancel={releaseDir}
-      on:pointerleave={releaseDir}>▶</button>
+      on:pointerdown|preventDefault={(e) => { capture(e); pressDir(1); }}>▶</button>
   </div>
 {/if}
 
@@ -358,7 +400,7 @@
     border-top: 1px solid rgba(255,255,255,0.08);
     padding: 8px 8px calc(8px + env(safe-area-inset-bottom)) 8px;
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
     gap: 6px;
     z-index: 500;
     user-select: none;
@@ -382,13 +424,14 @@
     transform: scale(0.96);
   }
   .tbtn.dir { font-size: 22px; padding: 18px 0; }
+  .tbtn.soft { color: #ffd166; font-size: 24px; padding: 18px 0; }
   .tbtn.rotcw { color: #00f0f0; font-size: 26px; padding: 18px 0; }
   .tbtn.hard { color: #f44336; font-size: 26px; padding: 18px 0; }
 
   @media (max-width: 480px) {
-    .touch-bar { padding: 6px 6px calc(6px + env(safe-area-inset-bottom)) 6px; }
+    .touch-bar { padding: 6px 4px calc(6px + env(safe-area-inset-bottom)) 4px; gap: 4px; }
     .tbtn { padding: 14px 0; font-size: 18px; }
     .tbtn.dir { font-size: 20px; }
-    .tbtn.rotcw, .tbtn.hard { font-size: 22px; }
+    .tbtn.soft, .tbtn.rotcw, .tbtn.hard { font-size: 22px; }
   }
 </style>
